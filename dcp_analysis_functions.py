@@ -421,7 +421,7 @@ def demographic_study(project_id):
     ax1.set_xlabel("Race", fontsize=14)
 
 
-def calcium_score_survival(variable, project_id, tag=None):
+def calcium_score_survival(project_id, tag=None, curve='survival', variable='chdatt'):
     ''' Compare survival risk for different CAC ranges'''
     
     count_query = """{ _case_count(project_id: "%s") }""" % (project_id)
@@ -444,7 +444,7 @@ def calcium_score_survival(variable, project_id, tag=None):
             itime = datetime.datetime.now()
             query_txt = """{ case(project_id: "%s", first:%d, offset:%d, order_by_asc: "submitter_id"){ 
                                          submitter_id
-                                         medical_histories{%s} 
+                                         medical_histories{%s chda} 
                                          cardiac_ct_scans{agatum1c}
                                       }
                             }""" % (project_id, chunk, offset, variable)
@@ -462,9 +462,11 @@ def calcium_score_survival(variable, project_id, tag=None):
         for c in data:
             case = c['submitter_id']
             if 'cardiac_ct_scans' in c and c['cardiac_ct_scans'] and 'medical_histories' in c and c['medical_histories']:
+                
                 cac = c['cardiac_ct_scans'][0]['agatum1c']
-                years = c['medical_histories'][0][variable] # risk score in 10 years
-
+                years = c['medical_histories'][0][variable]
+                censor = c['medical_histories'][0]['chda']
+                
                 if cac == 0:
                     cac = '0'
                 elif cac > 0 and cac <= 100:
@@ -479,47 +481,55 @@ def calcium_score_survival(variable, project_id, tag=None):
                     values['cac'].append(cac)
 
                     values.setdefault('years',[])
-                    values['years'].append(years*10)
+                    values['years'].append(years)
+                    
+                    values.setdefault('censors',[])
+                    values['censors'].append(censor)                   
 
         with open(filename, 'w') as fp:
                     json.dump(values, fp)
         
     if tag == None:
         tag = variable
-             
+                                
     # Prepare time for the compared groups
-    times = np.array(values['years'])
-    censors = np.array([1]*len(times))
+    times = [float(x)/365 for x in values['years']]
+    times = np.array(times)
+    censors = np.array(values['censors'])
     cac_values = np.array(values['cac'])
+         
+    if curve == 'survival':
+        # Plot Kaplan-Meier curve
+        kmf = KaplanMeierFitter()
+        first = 0
+        for r in cac_ranges:
+            ix = cac_values == r
+            if first == 0:
+                kmf.fit(times[ix], censors[ix], label=r)
+                ax = kmf.plot()
+                first = 1
+            else:
+                kmf.fit(times[ix], censors[ix], label=r) 
+                kmf.plot(ax=ax)
     
-    # Plot Kaplan-Meier curve
-    kmf = KaplanMeierFitter()
-    first = 0
-    for r in cac_ranges:
-        ix = cac_values == r
-        if first == 0:
-            kmf.fit(times[ix], censors[ix], label=r)
-            ax = kmf.plot()
-            first = 1
-        else:
-            kmf.fit(times[ix], censors[ix], label=r) 
-            kmf.plot(ax=ax)
-
-    # Plot hazard curve
-    #naf = NelsonAalenFitter() 
-    #first = 0
-    #for r in cac_ranges:
-    #    ix = cac_values == r
-    #    if first == 0:
-    #        naf.fit(times[ix], censors[ix], label=r)
-    #        ax = naf.plot()
-    #        first = 1
-    #    else:
-    #        naf.fit(times[ix], censors[ix], label=r) 
-    #        naf.plot(ax=ax)            
+    elif curve == 'hazard':
+        # Plot hazard curve
+        naf = NelsonAalenFitter() 
+        first = 0
+        for r in cac_ranges:
+            ix = cac_values == r
+            if first == 0:
+                naf.fit(times[ix], censors[ix], label=r)
+                ax = naf.plot()
+                first = 1
+            else:
+                naf.fit(times[ix], censors[ix], label=r) 
+                naf.plot(ax=ax)            
                     
-    ax.set_title(tag)
-    ax.set_xlabel("Years to event")
+       
+    ax.set_ylabel("%", fontsize=12)    
+    ax.set_title(tag, fontsize=14)
+    ax.set_xlabel("Years to event", fontsize=12)
     
     return times            
     
